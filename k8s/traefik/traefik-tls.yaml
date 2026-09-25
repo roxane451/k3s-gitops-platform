@@ -1,0 +1,64 @@
+# =============================================================================
+# Configure Traefik (intégré à K3s) pour gérer les certificats TLS
+# via Let's Encrypt natif — sans cert-manager.
+#
+# L'email ACME n'est pas versionné : il est injecté à l'application.
+#
+# Apply :
+#   export LETSENCRYPT_EMAIL=<email>
+#   envsubst '${LETSENCRYPT_EMAIL}' < k8s/traefik/traefik-tls.yaml | kubectl apply -f -
+# =============================================================================
+
+apiVersion: helm.cattle.io/v1
+kind: HelmChartConfig
+metadata:
+  name: traefik
+  namespace: kube-system
+
+spec:
+  valuesContent: |-
+    globalArguments:
+      - "--global.checknewversion=false"
+      - "--global.sendanonymoususage=false"
+
+    additionalArguments:
+      # Dashboard/API
+      - "--api.dashboard=true"
+
+      # Kubernetes
+      - "--providers.kubernetescrd=true"
+      - "--providers.kubernetesingress=true"
+
+      # Let's Encrypt
+      # Injecté par envsubst (voir en-tête)
+      - "--certificatesresolvers.letsencrypt.acme.email=${LETSENCRYPT_EMAIL}"
+      - "--certificatesresolvers.letsencrypt.acme.storage=/data/acme.json"
+
+      # Challenge ACME : TLS-ALPN-01 UNIQUEMENT.
+      # Ne pas activer httpchallenge en parallèle — les
+      # deux challenges simultanés sur le même certResolver provoquaient des
+      # échecs ACME ("Unable to get token: missing token.",
+      # "Cannot retrieve the ACME challenge"), donc aucun certificat n'était
+      # jamais émis (secret tls-app inexistant).
+      # ports.web redirige tout vers websecure (HTTPS), ce qui rend HTTP-01
+      # de toute façon peu fiable ici : le port 80 n'est jamais servi en clair
+      # le temps de la validation. TLS-ALPN-01 n'a pas cette dépendance.
+      - "--certificatesresolvers.letsencrypt.acme.tlschallenge=true"
+
+      # Décommenter uniquement en phase de test
+      # - "--certificatesresolvers.letsencrypt.acme.caserver=https://acme-staging-v02.api.letsencrypt.org/directory"
+
+    ports:
+      web:
+        redirectTo:
+          port: websecure
+
+      websecure:
+        tls:
+          enabled: true
+          certResolver: letsencrypt
+
+    persistence:
+      enabled: true
+      accessMode: ReadWriteOnce
+      size: 128Mi
