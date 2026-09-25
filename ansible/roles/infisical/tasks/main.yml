@@ -1,0 +1,128 @@
+---
+# ── infisical/tasks/main.yml ─────────────────────────────────────────────────
+#
+# Crée le secret K8s "infisical-token" dans chaque namespace applicatif.
+# - namespace app       ← credentials app-eso-prod
+# - namespace app-preprod ← credentials app-eso-preprod
+
+# ── Validation ────────────────────────────────────────────────────────────────
+- name: "Infisical bootstrap — vérifier client_id_prod"
+  ansible.builtin.fail:
+    msg: "ERREUR : infisical_client_id_prod est vide. Relance avec : -e infisical_client_id_prod=xxx"
+  when: infisical_client_id_prod | length == 0
+
+- name: "Infisical bootstrap — vérifier client_secret_prod"
+  ansible.builtin.fail:
+    msg: "ERREUR : infisical_client_secret_prod est vide. Relance avec : -e infisical_client_secret_prod=xxx"
+  when: infisical_client_secret_prod | length == 0
+
+- name: "Infisical bootstrap — vérifier client_id_preprod"
+  ansible.builtin.fail:
+    msg: "ERREUR : infisical_client_id_preprod est vide. Relance avec : -e infisical_client_id_preprod=xxx"
+  when: infisical_client_id_preprod | length == 0
+
+- name: "Infisical bootstrap — vérifier client_secret_preprod"
+  ansible.builtin.fail:
+    msg: "ERREUR : infisical_client_secret_preprod est vide. Relance avec : -e infisical_client_secret_preprod=xxx"
+  when: infisical_client_secret_preprod | length == 0
+
+# ── Namespaces ────────────────────────────────────────────────────────────────
+- name: "Infisical bootstrap — créer les namespaces si inexistants"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ infisical_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ item }}"
+  loop:
+    - app
+    - app-preprod
+
+# ── Secret prod → namespace app ──────────────────────────────────────────────
+- name: "Infisical bootstrap — secret prod dans namespace app"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ infisical_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: "{{ infisical_secret_name }}"
+        namespace: app
+        labels:
+          app.kubernetes.io/managed-by: ansible
+          app.kubernetes.io/component: infisical-bootstrap
+        annotations:
+          infisical.com/identity: "app-eso-prod"
+          infisical.com/auth: "universal-auth"
+      type: Opaque
+      stringData:
+        clientId: "{{ infisical_client_id_prod }}"
+        clientSecret: "{{ infisical_client_secret_prod }}"
+  no_log: true
+
+# ── Secret preprod → namespace app-preprod ───────────────────────────────────
+- name: "Infisical bootstrap — secret preprod dans namespace app-preprod"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ infisical_kubeconfig }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: "{{ infisical_secret_name }}"
+        namespace: app-preprod
+        labels:
+          app.kubernetes.io/managed-by: ansible
+          app.kubernetes.io/component: infisical-bootstrap
+        annotations:
+          infisical.com/identity: "app-eso-preprod"
+          infisical.com/auth: "universal-auth"
+      type: Opaque
+      stringData:
+        clientId: "{{ infisical_client_id_preprod }}"
+        clientSecret: "{{ infisical_client_secret_preprod }}"
+  no_log: true
+
+# ── ClusterSecretStore ────────────────────────────────────────────────────────
+- name: "Infisical bootstrap — appliquer le ClusterSecretStore"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ infisical_kubeconfig }}"
+    state: present
+    src: "{{ playbook_dir }}/../k8s/external-secrets/cluster-secret-store.yaml"
+
+# ── Vérification ─────────────────────────────────────────────────────────────
+- name: "Infisical bootstrap — vérifier que les ClusterSecretStores sont Valid"
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ infisical_kubeconfig }}"
+    api_version: external-secrets.io/v1
+    kind: ClusterSecretStore
+    name: "{{ item }}"
+  register: infisical_css_status
+  until: >
+    infisical_css_status.resources | length > 0 and
+    infisical_css_status.resources[0].status.conditions is defined and
+    infisical_css_status.resources[0].status.conditions
+    | selectattr('type', 'equalto', 'Ready')
+    | selectattr('status', 'equalto', 'True')
+    | list | length > 0
+  retries: 10
+  delay: 6
+  loop:
+    - infisical-store-backend
+    - infisical-store-r2
+    - infisical-store-mongodb
+    - infisical-store-preprod-backend
+    - infisical-store-preprod-mongodb
+    - infisical-store-preprod-r2
+
+- name: "Infisical bootstrap — résumé"
+  ansible.builtin.debug:
+    msg:
+      - "✅ Secret 'infisical-token' créé dans : app (app-eso-prod)"
+      - "✅ Secret 'infisical-token' créé dans : app-preprod (app-eso-preprod)"
+      - "✅ ClusterSecretStores prod  : infisical-store-backend, infisical-store-r2, infisical-store-mongodb"
+      - "✅ ClusterSecretStores preprod : infisical-store-preprod-backend, infisical-store-preprod-mongodb, infisical-store-preprod-r2"
+      - "→ Maintenant, lancer : helm upgrade --install app ..."

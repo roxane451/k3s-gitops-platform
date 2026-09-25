@@ -1,0 +1,4 @@
+---
+# Point d'entrée : déploiement complet du nœud K3s (voir playbook-k3s.yml)
+- name: Déploiement complet du nœud K3s
+  ansible.builtin.import_playbook: playbook-k3s.yml

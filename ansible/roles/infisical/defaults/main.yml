@@ -1,0 +1,20 @@
+---
+# ── infisical/defaults/main.yml ──────────────────────────────────────────────
+#
+# Variables à surcharger via group_vars ou -e en ligne de commande.
+# Ne jamais mettre les valeurs réelles ici — passer via Ansible Vault
+# ou variables d'environnement.
+
+# Machine Identity Infisical — app-eso-prod (namespace app)
+infisical_client_id_prod: ""
+infisical_client_secret_prod: ""
+
+# Machine Identity Infisical — app-eso-preprod (namespace app-preprod)
+infisical_client_id_preprod: ""
+infisical_client_secret_preprod: ""
+
+# Nom du secret K8s créé dans chaque namespace
+infisical_secret_name: infisical-token
+
+# Kubeconfig à utiliser (récupéré par le rôle k3s)
+infisical_kubeconfig: "{{ k3s_kubeconfig_local_path | default('~/.kube/config-' ~ inventory_hostname) }}"

@@ -1,0 +1,164 @@
+---
+# Déploiement complet du nœud K3s. Ordre et commandes détaillés :
+# DEPLOY_PRODUCTION.md et inventories/production.yml.
+#
+# L'IP du VPS est lue depuis la variable d'environnement OVH_VPS_IP
+# (voir inventories/production.yml).
+
+# ─────────────────────────────────────────────────────────────
+# 1 devsec.hardening.os_hardening (kernel, sysctl, permissions, PAM)
+# Rôle communautaire de référence, utilisé sans modification.
+# La configuration SSH est gérée par le rôle local os_hardening (play 2).
+# Variables : group_vars/k3s_cluster.yml
+# ─────────────────────────────────────────────────────────────
+- name: "OS hardening — devsec (kernel, sysctl)"
+  hosts: k3s_cluster
+  become: true
+  gather_facts: true
+  tags: [hardening, devsec]
+  vars:
+    os_security_users_allow: []
+  roles:
+    - role: devsec.hardening.os_hardening
+
+# ─────────────────────────────────────────────────────────────
+# 2 Surcouche os_hardening (rôle local)
+# SSH, UFW (règles K3s), fail2ban, unattended-upgrades, anti-lockout
+# ─────────────────────────────────────────────────────────────
+- name: "OS hardening surcouche app (SSH, UFW, fail2ban, upgrades)"
+  hosts: k3s_cluster
+  become: true
+  gather_facts: true
+  tags: [hardening, ufw, fail2ban]
+  vars:
+    os_hardening_admin_cidr: "{{ admin_cidr | default('') }}"
+  roles:
+    - role: os_hardening
+
+# ─────────────────────────────────────────────────────────────
+# 3 K3s via xanmanning.k3s
+# Garde-fou : exige -e k3s_confirm=yes
+# ─────────────────────────────────────────────────────────────
+- name: "Installer / mettre à jour K3s"
+  hosts: k3s_cluster
+  become: true
+  gather_facts: true
+  tags: [k3s]
+
+  pre_tasks:
+    - name: Require explicit confirmation
+      ansible.builtin.fail:
+        msg: "Refusé : relancer avec -e k3s_confirm=yes"
+      when: k3s_confirm | default('no') != 'yes'
+
+    - name: Show target context
+      ansible.builtin.debug:
+        msg:
+          - "Host: {{ inventory_hostname }} ({{ deploy_environment | default('n/a') }})"
+          - "IP: {{ ansible_host }}"
+          - "K3s version target: {{ k3s_release_version }}"
+
+  roles:
+    - role: k3s
+
+  post_tasks:
+    - name: Installation summary
+      ansible.builtin.debug:
+        msg:
+          - "K3s OK on {{ inventory_hostname }}"
+          - "API: https://{{ ansible_host }}:6443"
+          - "kubeconfig local: {{ k3s_kubeconfig_local_path | default('non défini') }}"
+
+# ─────────────────────────────────────────────────────────────
+# 4 External Secrets Operator
+# Installe Helm (version épinglée) puis ESO via kubernetes.core.helm (idempotent).
+# Requis avant le bootstrap Infisical (ClusterSecretStore en dépend).
+# ─────────────────────────────────────────────────────────────
+- name: "Installer External Secrets Operator (ESO)"
+  hosts: k3s_cluster
+  become: true
+  gather_facts: false
+  tags: [eso, infisical]
+
+  vars:
+    helm_version: v3.16.4
+    # Épingler sur la version en service (helm list -n external-secrets).
+    # Les manifests utilisent l'API external-secrets.io/v1 (ESO >= 0.17).
+    # Vide = dernière version du chart.
+    eso_chart_version: ""
+    k3s_kubeconfig: /etc/rancher/k3s/k3s.yaml
+
+  tasks:
+    - name: Vérifier si Helm est installé
+      ansible.builtin.stat:
+        path: /usr/local/bin/helm
+      register: helm_bin
+
+    - name: Télécharger et installer Helm {{ helm_version }}
+      when: not helm_bin.stat.exists
+      block:
+        - name: Télécharger l'archive Helm
+          ansible.builtin.unarchive:
+            src: "https://get.helm.sh/helm-{{ helm_version }}-linux-amd64.tar.gz"
+            dest: /tmp
+            remote_src: true
+            creates: /tmp/linux-amd64/helm
+
+        - name: Installer le binaire Helm
+          ansible.builtin.copy:
+            src: /tmp/linux-amd64/helm
+            dest: /usr/local/bin/helm
+            remote_src: true
+            mode: "0755"
+
+    - name: Ajouter le dépôt Helm external-secrets
+      kubernetes.core.helm_repository:
+        name: external-secrets
+        repo_url: https://charts.external-secrets.io
+
+    - name: Installer External Secrets Operator
+      kubernetes.core.helm:
+        name: external-secrets
+        chart_ref: external-secrets/external-secrets
+        chart_version: "{{ eso_chart_version | default(omit, true) }}"
+        release_namespace: external-secrets
+        create_namespace: true
+        update_repo_cache: true
+        wait: true
+        wait_timeout: 120s
+        kubeconfig: "{{ k3s_kubeconfig }}"
+
+    - name: Vérifier que les pods ESO sont Running
+      ansible.builtin.command: k3s kubectl get pods -n external-secrets
+      register: eso_pods
+      changed_when: false
+
+    - name: Afficher les pods ESO
+      ansible.builtin.debug:
+        var: eso_pods.stdout_lines
+
+# ─────────────────────────────────────────────────────────────
+# 5 Bootstrap Infisical — Universal Auth
+#
+# Crée le secret K8s "infisical-token" dans les namespaces app et
+# app-preprod, puis applique les ClusterSecretStores.
+# À exécuter APRÈS K3s et ESO, AVANT le premier déploiement applicatif.
+#
+# Credentials attendus (jamais en clair dans le dépôt) :
+#   infisical_client_id_prod / infisical_client_secret_prod
+#   infisical_client_id_preprod / infisical_client_secret_preprod
+# via -e ou Ansible Vault (voir roles/infisical/defaults/main.yml).
+# ─────────────────────────────────────────────────────────────
+- name: "Bootstrap Infisical — secret K8s et ClusterSecretStore"
+  hosts: localhost
+  connection: local
+  become: false
+  gather_facts: false
+  tags: [infisical, bootstrap]
+
+  vars:
+    # Kubeconfig récupéré par le rôle k3s au play 3
+    k3s_kubeconfig_local_path: "~/.kube/config-{{ groups['k3s_cluster'][0] }}"
+
+  roles:
+    - role: infisical
