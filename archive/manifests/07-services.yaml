@@ -1,0 +1,79 @@
+---
+# LoadBalancer Service for HTTPS/HTTP
+apiVersion: v1
+kind: Service
+metadata:
+  name: app-lb
+  namespace: app
+  labels:
+    app: app
+spec:
+  type: LoadBalancer
+  ports:
+  - port: 80
+    targetPort: 80
+    protocol: TCP
+    name: http
+  - port: 443
+    targetPort: 443
+    protocol: TCP
+    name: https
+  selector:
+    app: ingress-nginx
+
+---
+# Backend ClusterIP Service (if needed separately)
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend-internal
+  namespace: app
+  labels:
+    app: backend
+spec:
+  type: ClusterIP
+  ports:
+  - port: 5000
+    targetPort: 5000
+    protocol: TCP
+    name: http
+  selector:
+    app: backend
+
+---
+# Frontend ClusterIP Service (if needed separately)
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend-internal
+  namespace: app
+  labels:
+    app: frontend
+spec:
+  type: ClusterIP
+  ports:
+  - port: 3000
+    targetPort: 3000
+    protocol: TCP
+    name: http
+  selector:
+    app: frontend
+
+---
+# MongoDB Service (Headless)
+apiVersion: v1
+kind: Service
+metadata:
+  name: mongodb-internal
+  namespace: app
+  labels:
+    app: mongodb
+spec:
+  clusterIP: None
+  ports:
+  - port: 27017
+    targetPort: 27017
+    protocol: TCP
+    name: mongodb
+  selector:
+    app: mongodb

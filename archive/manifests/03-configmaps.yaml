@@ -1,0 +1,51 @@
+---
+# Namespace for the application
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: app
+  labels:
+    name: app
+    environment: preprod
+
+---
+# ConfigMap for MongoDB configuration
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mongodb-config
+  namespace: app
+data:
+  # Utilisé uniquement par le pod MongoDB lui-même
+  MONGO_INITDB_DATABASE: "app"
+
+  # Optionnel : valeurs de référence (pas utilisées par le backend si tu utilises mongodb-uri du secret)
+  MONGODB_HOST: "mongodb.app.svc.cluster.local"
+  MONGODB_PORT: "27017"
+  MONGODB_DATABASE: "app"
+
+---
+# ConfigMap for Backend environment
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backend-config
+  namespace: app
+data:
+  NODE_ENV: "production"
+  PORT: "5000"
+  CORS_ORIGIN: "https://example.com"
+  MONGODB_HOST: "mongodb"
+  MONGODB_DATABASE: "app"
+  JWT_EXPIRY: "7d"
+
+---
+# ConfigMap for Frontend environment
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: frontend-config
+  namespace: app
+data:
+  VITE_API_URL: "https://api.example.com/api"
+  NODE_ENV: "production"

@@ -1,0 +1,10 @@
+---
+# Kubernetes Namespace for the application
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: app
+  labels:
+    name: app
+    environment: preprod
+    managed-by: terraform

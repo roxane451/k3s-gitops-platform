@@ -1,0 +1,144 @@
+---
+# Backend API Deployment
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: app
+  labels:
+    app: backend
+    environment: preprod
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+        environment: preprod
+    spec:
+      securityContext:
+        fsGroup: 1000
+
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchExpressions:
+                    - key: app
+                      operator: In
+                      values:
+                        - backend
+                topologyKey: kubernetes.io/hostname
+
+      # ✅ CORRECTION 1: volumes doit être au niveau du spec, pas du container
+      volumes:
+        - name: secrets-volume
+          secret:
+            secretName: backend-secret
+
+      containers:
+        - name: backend
+          image: ghcr.io/<GITHUB_USER>/app/backend:latest
+          imagePullPolicy: IfNotPresent  # ✅ CORRECTION 3: Change "Never" pour k3d local
+          ports:
+            - containerPort: 5000
+              name: http
+              protocol: TCP
+
+          volumeMounts:
+            - name: secrets-volume
+              mountPath: "/app/secrets"
+              readOnly: true
+
+          env:
+            # ✅ CORRECTION 4: Ajoute NODE_ENV
+            - name: NODE_ENV
+              value: "production"
+
+            - name: PORT
+              value: "5000"
+
+            - name: MONGODB_URI
+              valueFrom:
+                secretKeyRef:
+                  name: backend-secret
+                  key: mongodb-uri
+
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: backend-secret
+                  key: jwt-secret
+
+            - name: JWT_EXPIRES_IN
+              value: "7d"
+
+            - name: FRONTEND_URL
+              value: "http://localhost:8080"
+
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: 500m
+              memory: 512Mi
+
+          livenessProbe:
+            httpGet:
+              path: /api/health
+              port: 5000
+            initialDelaySeconds: 30
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 5000
+            initialDelaySeconds: 10
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 2
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            runAsNonRoot: false  # OK pour dev, changer à true en prod avec un USER non-root Dockerfile
+            readOnlyRootFilesystem: false
+            capabilities:
+              drop:
+                - ALL
+
+      # A Ddécommente => registry privé
+      # imagePullSecrets:
+      #   - name: ghcr-secret
+
+---
+# Backend Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  namespace: app
+  labels:
+    app: backend
+spec:
+  type: ClusterIP
+  ports:
+  - port: 5000
+    targetPort: 5000
+    protocol: TCP
+    name: http
+  selector:
+    app: backend

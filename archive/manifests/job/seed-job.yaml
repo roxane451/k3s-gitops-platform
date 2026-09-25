@@ -1,0 +1,54 @@
+# seed-job.yaml
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: seed-database
+  namespace: app
+spec:
+  template:
+    spec:
+      restartPolicy: Never
+
+      # ✅ Attendre que MongoDB soit prêt avant de lancer le seed
+      initContainers:
+      - name: wait-for-mongodb
+        image: busybox:1.36
+        command:
+        - sh
+        - -c
+        - |
+          echo "⏳ Waiting for MongoDB to be ready..."
+          until nc -z mongodb.app.svc.cluster.local 27017; do
+            echo "MongoDB not ready yet, waiting 5s..."
+            sleep 5
+          done
+          echo "✅ MongoDB is ready!"
+
+      containers:
+      - name: seeder
+        image: ghcr.io/<GITHUB_USER>/app/backend:latest
+        imagePullPolicy: IfNotPresent
+        command: ["npm", "run", "seed"]
+        env:
+        - name: NODE_ENV
+          value: "production"
+        - name: MONGODB_URI
+          valueFrom:
+            secretKeyRef:
+              name: backend-secret
+              key: mongodb-uri
+        - name: JWT_SECRET
+          valueFrom:
+            secretKeyRef:
+              name: backend-secret
+              key: jwt-secret
+        - name: JWT_EXPIRES_IN
+          value: "7d"
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 200m
+            memory: 256Mi
+  backoffLimit: 3
