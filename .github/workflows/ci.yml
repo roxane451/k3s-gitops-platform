@@ -1,0 +1,111 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  terraform:
+    name: Terraform
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.8"
+
+      - name: terraform fmt
+        run: terraform fmt -check -recursive -diff
+
+      - name: terraform init (sans backend)
+        run: terraform init -backend=false -input=false
+
+      - name: terraform validate
+        run: terraform validate
+
+      - uses: terraform-linters/setup-tflint@v4
+
+      - name: tflint
+        run: |
+          tflint --init
+          tflint --format compact
+
+  ansible:
+    name: Ansible
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ansible
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Installer ansible-lint
+        run: pip install ansible-core ansible-lint
+
+      - name: Installer les dépendances Galaxy
+        run: |
+          ansible-galaxy role install -r requirements.yml
+          ansible-galaxy collection install -r requirements.yml
+
+      - name: ansible-lint
+        env:
+          OVH_VPS_IP: 192.0.2.10
+        run: ansible-lint
+
+  yaml-k8s:
+    name: YAML & manifests Kubernetes
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: yamllint
+        run: pip install yamllint && yamllint .
+
+      - name: Installer kubeconform
+        run: |
+          curl -sSfL https://github.com/yannh/kubeconform/releases/download/v0.6.7/kubeconform-linux-amd64.tar.gz \
+            | tar -xz -C /usr/local/bin kubeconform
+
+      - name: kubeconform
+        # Les CRD (ArgoCD, External Secrets, Traefik, Prometheus Operator) sont
+        # validées via le catalogue communautaire datreeio/CRDs-catalog.
+        # HelmChartConfig (CRD K3s) n'y figure pas ; les dashboards JSON
+        # Grafana ne sont pas des manifests.
+        run: |
+          kubeconform -strict -summary \
+            -kubernetes-version 1.31.4 \
+            -schema-location default \
+            -schema-location 'https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json' \
+            -skip HelmChartConfig \
+            -ignore-filename-pattern '\.json$' \
+            k8s/
+
+  secrets:
+    name: Détection de secrets
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: gitleaks
+        run: |
+          curl -sSfL https://github.com/gitleaks/gitleaks/releases/download/v8.24.0/gitleaks_8.24.0_linux_x64.tar.gz \
+            | tar -xz -C /usr/local/bin gitleaks
+          gitleaks git --redact --verbose .
