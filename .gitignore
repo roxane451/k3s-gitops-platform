@@ -1,0 +1,48 @@
+# Terraform
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+crash.log
+terraform/schema.json
+
+# Scripts utilitaires Terraform (non versionnés)
+terraform/node_modules/
+terraform/package-lock.json
+terraform/package.json
+terraform/test.js
+
+# Ansible
+*.retry
+group_vars/all/vault.yml
+*.vault
+# Dépendances Galaxy : installées via ansible/requirements.yml, jamais commitées
+ansible/roles/k3s/
+ansible/collections/ansible_collections/
+
+# Secrets & certificats — NE JAMAIS COMMITER
+*.pem
+*.key
+*.crt
+*.p12
+*.pfx
+tls.key
+tls.crt
+.env
+.env.*
+*.local.secret.yml
+kubeconfig*
+*.kubeconfig
+
+# Python
+__pycache__/
+*.pyc
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
