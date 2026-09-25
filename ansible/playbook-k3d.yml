@@ -1,0 +1,11 @@
+---
+- name: "Provisionner un cluster k3d local (staging) et déployer le chart"
+  hosts: localhost
+  connection: local
+  become: false   # run locally without sudo (asks only for tasks that explicitly use become)
+  gather_facts: true
+  vars:
+    target_environment: k3d    # renamed to avoid reserved name 'environment'
+  roles:
+    - role: k3d
+      tags: [k3d]

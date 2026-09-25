@@ -1,0 +1,326 @@
+---
+- name: Construire la liste des sockets Docker candidats
+  ansible.builtin.set_fact:
+    k3d_docker_socket_candidates:
+      - "{{ (ansible_facts['env']['DOCKER_HOST'] | default('')) | regex_replace('^unix://', '') }}"
+      - "/var/run/docker.sock"
+      - "{{ ansible_facts['env']['HOME'] }}/.rd/docker.sock"
+      - "{{ ansible_facts['env']['HOME'] }}/.rancher-desktop/docker.sock"
+
+- name: Nettoyer la liste (supprimer les entrées vides)
+  ansible.builtin.set_fact:
+    k3d_docker_socket_candidates: "{{ k3d_docker_socket_candidates | reject('equalto', '') | list }}"
+
+- name: Tester l'existence des sockets candidats
+  ansible.builtin.stat:
+    path: "{{ item }}"
+  loop: "{{ k3d_docker_socket_candidates }}"
+  register: k3d_docker_socket_checks
+
+- name: Définir le socket Docker trouvé (premier qui existe)
+  ansible.builtin.set_fact:
+    k3d_docker_socket_found: >-
+      {{
+        k3d_docker_socket_checks.results
+        | selectattr('stat.exists', 'defined')
+        | selectattr('stat.exists', 'equalto', true)
+        | map(attribute='item')
+        | first
+        | default('')
+      }}
+
+- name: Échec si aucun socket Docker trouvé
+  ansible.builtin.fail:
+    msg: |
+      Docker daemon introuvable.
+      Chemins testés : {{ k3d_docker_socket_candidates | join(', ') }}
+      Si Rancher Desktop : activez "Enable Docker CLI (dockerd)" dans Settings → Container Runtime,
+      ou définissez DOCKER_HOST=unix:///Users/<user>/.rd/docker.sock
+  when: k3d_docker_socket_found == ''
+
+- name: Afficher le socket Docker utilisé
+  ansible.builtin.debug:
+    msg: "Socket Docker détecté : {{ k3d_docker_socket_found }}"
+
+- name: Préparer l'environnement pour k3d (DOCKER_HOST si socket non standard)
+  ansible.builtin.set_fact:
+    k3d_exec_env: "{{ {'DOCKER_HOST': 'unix://' + k3d_docker_socket_found} if k3d_docker_socket_found != '/var/run/docker.sock' else {} }}"
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Installation de k3d
+# ──────────────────────────────────────────────────────────────────────────────
+
+- name: Vérifier si k3d est déjà installé
+  ansible.builtin.command: k3d --version
+  register: k3d_check
+  changed_when: false
+  failed_when: false
+
+- name: Déterminer si installation/mise à jour k3d est nécessaire
+  ansible.builtin.set_fact:
+    k3d_needs_install: "{{ (k3d_check.rc != 0) or (k3d_check.stdout is not search(k3d_version)) }}"
+
+- name: Déterminer l'URL de téléchargement k3d (fallback macOS)
+  ansible.builtin.set_fact:
+    k3d_download_url: >-
+      https://github.com/k3d-io/k3d/releases/download/{{ k3d_version }}/k3d-darwin-{{ 'arm64' if ansible_facts['machine'] == 'arm64' else 'amd64' }}
+  when: k3d_needs_install
+
+- name: Télécharger et installer k3d binaire (fallback)
+  ansible.builtin.get_url:
+    url: "{{ k3d_download_url }}"
+    dest: /usr/local/bin/k3d
+    mode: '0755'
+    force: true
+  become: true
+  when: k3d_needs_install
+
+- name: Vérifier la version de k3d installée
+  ansible.builtin.command: k3d --version
+  register: k3d_version_out
+  changed_when: false
+  failed_when: k3d_version_out.stdout is not search(k3d_version)
+
+- name: Vérifier que Helm est installé
+  ansible.builtin.command: helm version --short
+  register: k3d_helm_check
+  changed_when: false
+  failed_when: k3d_helm_check.rc != 0
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Gestion du cluster k3d
+# ──────────────────────────────────────────────────────────────────────────────
+
+- name: "Lister les clusters k3d"
+  ansible.builtin.command: k3d cluster list
+  environment: "{{ k3d_exec_env | default({}) }}"
+  register: k3d_cluster_list
+  failed_when: false
+  changed_when: false
+
+- name: "Déterminer si le cluster existe — {{ k3d_cluster_name }}"
+  ansible.builtin.set_fact:
+    k3d_cluster_exists: "{{ (k3d_cluster_list.stdout is search('(^|\\n)' ~ k3d_cluster_name ~ '(\\s|\\n|$)')) }}"
+  changed_when: false
+
+- name: "Supprimer le cluster si état 'absent' demandé"
+  ansible.builtin.command:
+    argv:
+      - k3d
+      - cluster
+      - delete
+      - "{{ k3d_cluster_name }}"
+      - --wait
+  environment: "{{ k3d_exec_env | default({}) }}"
+  when: k3d_state == 'absent' and k3d_cluster_exists
+  changed_when: true
+
+- name: Fin du rôle si cluster doit être absent
+  ansible.builtin.meta: end_play
+  when: k3d_state == 'absent'
+
+- name: Construire les arguments --port pour k3d
+  ansible.builtin.set_fact:
+    k3d_port_args: "{{ (k3d_ports | default([])) | map('regex_replace', '^(.*)$', '--port|\\1') | map('split', '|') | list | flatten }}"
+
+- name: Créer le répertoire de volume hôte si nécessaire
+  ansible.builtin.file:
+    path: "{{ k3d_volume }}"
+    state: directory
+    mode: '0755'
+
+- name: Vérifier que le port API k3s n'est pas déjà utilisé
+  ansible.builtin.shell: "set -o pipefail && ss -lntp | awk '{print $4}' | grep -E ':({{ k3d_api_port }})$' || true"
+  args:
+    executable: /bin/bash
+  register: k3d_api_port_check
+  changed_when: false
+  failed_when: k3d_api_port_check.stdout != ''
+
+- name: Créer le fichier registries.yaml pour GHCR (pull direct des images)
+  ansible.builtin.template:
+    src: registries.yaml.j2
+    dest: "/tmp/k3d-registries-{{ k3d_cluster_name }}.yaml"
+    mode: '0644'
+  vars:
+    github_username: "{{ github_username | default('roxane451') }}"
+    github_pat: "{{ github_pat_read_packages | default('') }}"
+  no_log: true
+
+- name: Créer le cluster k3d avec configuration registry GHCR
+  ansible.builtin.command:
+    argv: >-
+      {{ ['k3d', 'cluster', 'create', k3d_cluster_name, '--api-port', (k3d_api_port | string)]
+         + k3d_port_args
+         + ['--agents', ((k3d_agents | default(0)) | string),
+            '--volume', (k3d_volume ~ ':' ~ k3d_volume ~ '@all'),
+            '--registry-config', ('/tmp/k3d-registries-' ~ k3d_cluster_name ~ '.yaml')] }}
+  environment: "{{ k3d_exec_env | default({}) }}"
+  when: not k3d_cluster_exists
+  register: k3d_create
+  changed_when: not k3d_cluster_exists
+
+- name: Vérifier que kubectl est installé
+  ansible.builtin.command: kubectl version --client
+  register: k3d_kubectl_check
+  changed_when: false
+  failed_when: k3d_kubectl_check.rc != 0
+
+- name: Nettoyer le fichier registries.yaml temporaire
+  ansible.builtin.file:
+    path: "/tmp/k3d-registries-{{ k3d_cluster_name }}.yaml"
+    state: absent
+
+- name: Attendre que tous les nœuds soient Ready
+  ansible.builtin.command: "kubectl wait --for=condition=Ready nodes --all --timeout={{ k3d_wait_timeout | default(120) }}s"
+  changed_when: false
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Déploiement Helm
+# ──────────────────────────────────────────────────────────────────────────────
+
+- name: Créer le namespace cible (si absent)
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ k3d_namespace }}"
+
+- name: Construire le dockerconfigjson pour GHCR
+  ansible.builtin.set_fact:
+    k3d_ghcr_dockerconfigjson: >-
+      {{
+        {
+          "auths": {
+            "ghcr.io": {
+              "username": (github_username | default('roxane451')),
+              "password": github_pat_read_packages,
+              "auth": (
+                ((github_username | default('roxane451')) ~ ":" ~ github_pat_read_packages)
+                | b64encode
+              )
+            }
+          }
+        } | to_json | b64encode
+      }}
+  when: github_pat_read_packages is defined and (github_pat_read_packages | length > 0)
+  no_log: true
+
+- name: Créer / mettre à jour le secret imagePull GHCR
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: "{{ k3d_registry_secret_name }}"
+        namespace: "{{ k3d_namespace }}"
+      type: kubernetes.io/dockerconfigjson
+      data:
+        .dockerconfigjson: "{{ k3d_ghcr_dockerconfigjson }}"
+  when: github_pat_read_packages is defined and (github_pat_read_packages | length > 0)
+  no_log: true
+
+- name: Échec explicite si PAT GHCR requis mais absent
+  ansible.builtin.fail:
+    msg: >-
+      github_pat_read_packages est requis (k3d_require_ghcr_pat=true) pour créer
+      le secret {{ k3d_registry_secret_name }} et pull les images GHCR privées.
+      Définis cette variable via @roles/k3d/k3d.local.secret.yml ou -e.
+  when:
+    - k3d_require_ghcr_pat | bool
+    - github_pat_read_packages is not defined or (github_pat_read_packages | length == 0)
+
+- name: Déployer / mettre à jour le chart Helm
+  block:
+    - name: Helm upgrade --install
+      ansible.builtin.shell: >
+        helm upgrade --install {{ k3d_helm_release_name }}
+        {{ k3d_helm_chart_path }}
+        -f {{ k3d_helm_chart_path }}/{{ k3d_helm_values_file | default('values-k3d.yaml') }}
+        --namespace {{ k3d_namespace | default('default') }}
+        --create-namespace
+        {% if k3d_helm_atomic | default(true) %}--atomic{% endif %}
+        --wait --timeout {{ k3d_helm_timeout | default(300) }}s
+      register: k3d_helm_deploy
+      changed_when: k3d_helm_deploy.rc == 0
+
+    - name: Vérifier le rollout backend
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - rollout
+          - status
+          - deploy/backend
+          - -n
+          - "{{ k3d_namespace }}"
+          - "--timeout={{ k3d_rollout_timeout | default(180) }}s"
+      changed_when: false
+
+    - name: Vérifier le rollout frontend
+      ansible.builtin.command:
+        argv:
+          - kubectl
+          - rollout
+          - status
+          - deploy/frontend
+          - -n
+          - "{{ k3d_namespace }}"
+          - "--timeout={{ k3d_rollout_timeout | default(180) }}s"
+      changed_when: false
+  rescue:
+    - name: Diagnostic - pods dans le namespace
+      ansible.builtin.shell: "kubectl get pods -n {{ k3d_namespace }} -o wide || true"
+      register: k3d_diag_pods
+      changed_when: false
+
+    - name: Diagnostic - deployments dans le namespace
+      ansible.builtin.shell: "kubectl get deploy -n {{ k3d_namespace }} || true"
+      register: k3d_diag_deploy
+      changed_when: false
+
+    - name: Diagnostic - events récents du namespace
+      ansible.builtin.shell: "set -o pipefail && kubectl get events -n {{ k3d_namespace }} --sort-by=.lastTimestamp | tail -n 80 || true"
+      args:
+        executable: /bin/bash
+      register: k3d_diag_events
+      changed_when: false
+
+    - name: Afficher le diagnostic Helm/Kubernetes
+      ansible.builtin.debug:
+        msg:
+          - "Helm a échoué. Diagnostic namespace {{ k3d_namespace }}:"
+          - "--- kubectl get deploy ---"
+          - "{{ k3d_diag_deploy.stdout | default('') }}"
+          - "--- kubectl get pods -o wide ---"
+          - "{{ k3d_diag_pods.stdout | default('') }}"
+          - "--- kubectl get events (derniers) ---"
+          - "{{ k3d_diag_events.stdout | default('') }}"
+
+    - name: Échec du déploiement Helm avec diagnostic
+      ansible.builtin.fail:
+        msg: >-
+          helm upgrade --install a échoué pour release {{ k3d_helm_release_name }}
+          (namespace {{ k3d_namespace }}). Voir diagnostics affichés ci-dessus.
+
+- name: Afficher les services et ingresses déployés
+  ansible.builtin.shell: "kubectl get ingress,svc -n {{ k3d_namespace }} -o wide || true"
+  register: k3d_services
+  changed_when: false
+
+- name: Afficher les pods déployés
+  ansible.builtin.shell: "kubectl get pods -n {{ k3d_namespace }} -o wide || true"
+  register: k3d_pods
+  changed_when: false
+
+- name: Afficher le résumé de déploiement
+  ansible.builtin.debug:
+    msg:
+      - "k3d version     : {{ k3d_version_out.stdout | default('inconnue') }}"
+      - "Cluster         : {{ k3d_cluster_name }} ({{ 'nouveau' if not k3d_cluster_exists else 'existant' }})"
+      - "Helm release    : {{ k3d_helm_release_name }} (ns: {{ k3d_namespace }})"
+      - "Accès frontend  : http://localhost:{{ (k3d_ports | select('search', '80:') | first | default('8080')).split(':')[0] }}"
+      - "Pods (résumé)   :"
+      - "{{ k3d_pods.stdout | default('') }}"

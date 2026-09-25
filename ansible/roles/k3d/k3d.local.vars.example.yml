@@ -1,0 +1,5 @@
+# Copy this file to: ansible/roles/k3d/k3d.local.secret.yml
+# That file is ignored by git (pattern: *secret*)
+
+github_username: roxane451
+github_pat_read_packages: "ghp_replace_me"

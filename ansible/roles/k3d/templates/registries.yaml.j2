@@ -1,0 +1,11 @@
+mirrors:
+  "ghcr.io":
+    endpoint:
+      - "https://ghcr.io"
+{% if github_pat is defined and github_pat | length > 0 %}
+configs:
+  "ghcr.io":
+    auth:
+      username: "{{ github_username | default('roxane451') }}"
+      password: "{{ github_pat }}"
+{% endif %}

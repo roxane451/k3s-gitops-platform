@@ -1,0 +1,47 @@
+---
+- name: "Bootstrap local Ansible dependencies"
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  tags: [bootstrap]
+  tasks:
+    - name: Verify ansible-galaxy is available
+      ansible.builtin.command: ansible-galaxy --version
+      changed_when: false
+
+    - name: Install Ansible Galaxy roles
+      ansible.builtin.command: ansible-galaxy role install -r requirements.yml
+      args:
+        chdir: "{{ playbook_dir }}"
+      register: galaxy_roles_result
+      changed_when: "'was installed' in galaxy_roles_result.stdout"
+
+    - name: Install Ansible Galaxy collections
+      ansible.builtin.command: ansible-galaxy collection install -r requirements.yml
+      args:
+        chdir: "{{ playbook_dir }}"
+      register: galaxy_collections_result
+      changed_when: "'was installed' in galaxy_collections_result.stdout"
+
+- name: "Provisionner un cluster k3d local et déployer le chart"
+  hosts: localhost
+  connection: local
+  become: false
+  gather_facts: true
+  tags: [k3d]
+  vars:
+    target_environment: k3d
+  pre_tasks:
+    - name: Check local k3d secret vars file
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/roles/k3d/k3d.local.secret.yml"
+      register: k3d_local_secret_file
+
+    - name: Load local k3d secret vars
+      ansible.builtin.include_vars:
+        file: "{{ playbook_dir }}/roles/k3d/k3d.local.secret.yml"
+      when: k3d_local_secret_file.stat.exists
+      no_log: true
+  roles:
+    - role: k3d
+      tags: [k3d]

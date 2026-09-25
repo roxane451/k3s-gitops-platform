@@ -1,0 +1,33 @@
+---
+# Defaults for the k3d Ansible role (local development cluster)
+
+k3d_cluster_name: staging
+k3d_state: present        # present | absent — 'absent' supprime le cluster
+k3d_version: v5.7.4
+k3d_api_port: 6443
+k3d_ports:
+  - "8080:80@loadbalancer"
+  - "8443:443@loadbalancer"
+k3d_agents: 0
+
+# Local path mounted into every node for persistent storage
+k3d_volume: /tmp/k3d-storage
+
+# Optional: list of local images to import into the k3d cluster
+k3d_import_images: []
+
+# Helm chart — le repo app-helm doit être cloné localement
+# Passer le chemin via : -e k3d_helm_chart_path=/path/to/app-helm
+# Exemple : ../app-helm (si cloné à côté de k3s-gitops-platform)
+k3d_helm_chart_path: "{{ k3d_helm_chart_path | mandatory }}"
+k3d_helm_release_name: app
+k3d_helm_values_file: values-k3d.yaml
+k3d_helm_atomic: true
+k3d_helm_timeout: 300
+k3d_rollout_timeout: 180
+k3d_namespace: app-staging
+k3d_registry_secret_name: ghcr-secret
+k3d_require_ghcr_pat: true
+
+# Timeout (seconds) pour les opérations d'attente
+k3d_wait_timeout: 300
