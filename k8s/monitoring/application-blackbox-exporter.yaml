@@ -1,0 +1,69 @@
+# Déploie blackbox_exporter via ArgoCD (namespace monitoring).
+# Utilisé pour sonder les endpoints HTTPS (example.com, grafana, argocd)
+# et exposer la métrique probe_ssl_earliest_cert_expiry consommée par
+# l'alerte TLSCertExpiringSoon dans prometheus-rules-infra.yaml.
+#
+# Prérequis : kube-prometheus-stack déjà installé (CRD "Probe" fournie
+# par ce chart — cf. application-prometheus.yaml, crds.enabled: true).
+#
+# Vérification post-install :
+#   kubectl get pods -n monitoring -l app.kubernetes.io/name=prometheus-blackbox-exporter
+#   kubectl get probe -n monitoring
+#   → dans Prometheus : Status > Targets → chercher le job "tls-probe"
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: blackbox-exporter
+  namespace: argocd
+  labels:
+    layer: infra
+    app: monitoring
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://prometheus-community.github.io/helm-charts
+    chart: prometheus-blackbox-exporter
+    # Vérifier la dernière version stable sur :
+    # https://github.com/prometheus-community/helm-charts/tree/main/charts/prometheus-blackbox-exporter
+    targetRevision: "9.5.0"
+    helm:
+      values: |
+        # Module HTTP standard (redirects suivis, code 2xx attendu) suffisant
+        # pour ce cas d'usage — le TLS handshake se fait de toute façon
+        # avant même l'évaluation du code de retour HTTP.
+        config:
+          modules:
+            http_2xx:
+              prober: http
+              timeout: 5s
+              http:
+                preferred_ip_protocol: "ip4"
+                tls_config:
+                  insecure_skip_verify: false
+
+        resources:
+          requests:
+            cpu: 10m
+            memory: 32Mi
+          limits:
+            cpu: 50m
+            memory: 64Mi
+
+        # Pas de securityContext restricted custom nécessaire ici, le chart
+        # applique déjà des défauts raisonnables (non-root).
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true

@@ -1,0 +1,506 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboard-app-loki
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+data:
+  app-loki.json: |
+    {
+      "id": null,
+      "uid": "app-loki-logs",
+      "title": "App / Logs (Loki)",
+      "description": "Dashboard applicatif de logs (namespace: app). V10 — requêtes allégées pour Loki 2.6.1 : statistiques en instant, tendances sur fenêtres fixes courtes, filtre erreurs simplifié, limite sur les panneaux de logs et recherche libre initialisée à .* pour éviter les requêtes vides. Les filtres Service/Pod utilisent .* pour All.",
+      "tags": [
+        "app",
+        "loki",
+        "logging",
+        "custom"
+      ],
+      "timezone": "Europe/Paris",
+      "schemaVersion": 39,
+      "version": 10,
+      "refresh": "30s",
+      "time": {
+        "from": "now-1h",
+        "to": "now"
+      },
+      "templating": {
+        "list": [
+          {
+            "name": "datasource",
+            "type": "datasource",
+            "query": "loki",
+            "hide": 0,
+            "current": {},
+            "regex": ""
+          },
+          {
+            "name": "namespace",
+            "type": "constant",
+            "query": "app",
+            "current": {
+              "value": "app",
+              "text": "app"
+            },
+            "hide": 2
+          },
+          {
+            "name": "container",
+            "label": "Service",
+            "type": "query",
+            "datasource": {
+              "type": "loki",
+              "uid": "$datasource"
+            },
+            "query": "label_values({namespace=\"$namespace\"}, container)",
+            "refresh": 2,
+            "sort": 1,
+            "includeAll": true,
+            "allValue": ".*",
+            "multi": false,
+            "current": {
+              "text": "All",
+              "value": ".*"
+            },
+            "regex": "",
+            "hide": 0
+          },
+          {
+            "name": "pod",
+            "label": "Pod",
+            "type": "query",
+            "datasource": {
+              "type": "loki",
+              "uid": "$datasource"
+            },
+            "query": "label_values({namespace=\"$namespace\", container=~\"$container\"}, pod)",
+            "refresh": 2,
+            "sort": 1,
+            "includeAll": true,
+            "allValue": ".*",
+            "multi": false,
+            "current": {
+              "text": "All",
+              "value": ".*"
+            },
+            "regex": "",
+            "hide": 0
+          },
+          {
+            "name": "searchable_pattern",
+            "label": "Recherche libre (debug)",
+            "type": "textbox",
+            "query": ".*",
+            "current": {
+              "text": ".*",
+              "value": ".*"
+            },
+            "hide": 0
+          }
+        ]
+      },
+      "panels": [
+        {
+          "id": 100,
+          "type": "row",
+          "title": "Vue d'ensemble",
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 0
+          },
+          "collapsed": false,
+          "panels": []
+        },
+        {
+          "id": 1,
+          "title": "Volume total de logs",
+          "type": "stat",
+          "description": "Nombre total de lignes de logs sur la plage de temps selectionnee, tous services confondus (selon filtres actifs)",
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 0,
+            "y": 1
+          },
+          "datasource": {
+            "type": "loki",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "sum(count_over_time({namespace=\"$namespace\", container=~\"$container\", pod=~\"$pod\"}[$__range]))",
+              "refId": "A",
+              "queryType": "instant"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "value": null,
+                    "color": "green"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": 2,
+          "title": "Erreurs / Warnings",
+          "type": "stat",
+          "description": "Compte les erreurs/warnings : niveaux Pino 40/50/60, severites MongoDB E/W/F et mots-cles des logs texte.",
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 6,
+            "y": 1
+          },
+          "datasource": {
+            "type": "loki",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "sum(count_over_time({namespace=\"$namespace\", container=~\"$container\", pod=~\"$pod\"} |~ \"(?i)error|warning|warn|fatal|panic|exception|critical|\"level\":40|\"level\":50|\"level\":60|\"s\":\"E\"|\"s\":\"W\"|\"s\":\"F\"\"[$__range]))",
+              "refId": "A",
+              "queryType": "instant"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "value": null,
+                    "color": "green"
+                  },
+                  {
+                    "value": 10,
+                    "color": "orange"
+                  },
+                  {
+                    "value": 50,
+                    "color": "red"
+                  }
+                ]
+              },
+              "noValue": "0"
+            }
+          }
+        },
+        {
+          "id": 3,
+          "title": "% de logs en erreur",
+          "type": "gauge",
+          "description": "Part des lignes detectees comme erreur/warning par rapport au volume total sur la plage selectionnee.",
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 12,
+            "y": 1
+          },
+          "datasource": {
+            "type": "loki",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "100 * sum(count_over_time({namespace=\"$namespace\", container=~\"$container\", pod=~\"$pod\"} |~ \"(?i)error|warning|warn|fatal|panic|exception|critical|\"level\":40|\"level\":50|\"level\":60|\"s\":\"E\"|\"s\":\"W\"|\"s\":\"F\"\"[$__range])) / sum(count_over_time({namespace=\"$namespace\", container=~\"$container\", pod=~\"$pod\"}[$__range]))",
+              "refId": "A",
+              "queryType": "instant"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percent",
+              "min": 0,
+              "max": 100,
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "value": null,
+                    "color": "green"
+                  },
+                  {
+                    "value": 10,
+                    "color": "orange"
+                  },
+                  {
+                    "value": 50,
+                    "color": "red"
+                  }
+                ]
+              },
+              "noValue": "0"
+            }
+          }
+        },
+        {
+          "id": 4,
+          "title": "Pods actifs",
+          "type": "stat",
+          "description": "Nombre de pods distincts ayant produit au moins une ligne de log sur la periode",
+          "gridPos": {
+            "h": 4,
+            "w": 6,
+            "x": 18,
+            "y": 1
+          },
+          "datasource": {
+            "type": "loki",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "count(sum by (pod) (count_over_time({namespace=\"$namespace\", container=~\"$container\", pod=~\"$pod\"}[$__range])))",
+              "refId": "A",
+              "queryType": "instant"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "color": {
+                "mode": "thresholds"
+              },
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  {
+                    "value": null,
+                    "color": "blue"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "id": 101,
+          "type": "row",
+          "title": "Repartition par service",
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 5
+          },
+          "collapsed": false,
+          "panels": []
+        },
+        {
+          "id": 5,
+          "title": "Volume de logs par service",
+          "type": "timeseries",
+          "description": "Nombre de lignes produites par service sur des fenêtres de 1 minute.",
+          "gridPos": {
+            "h": 8,
+            "w": 14,
+            "x": 0,
+            "y": 6
+          },
+          "datasource": {
+            "type": "loki",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "sum by (container) (count_over_time({namespace=\"$namespace\", container=~\"$container\", pod=~\"$pod\"}[1m]))",
+              "refId": "A",
+              "legendFormat": "{{container}}",
+              "queryType": "range"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "bars",
+                "fillOpacity": 40,
+                "stacking": {
+                  "mode": "normal"
+                }
+              }
+            }
+          }
+        },
+        {
+          "id": 6,
+          "title": "Repartition des erreurs par pod",
+          "type": "piechart",
+          "description": "Répartition des erreurs/warnings par pod. Panneau vide = aucune erreur détectée sur la période.",
+          "gridPos": {
+            "h": 8,
+            "w": 10,
+            "x": 14,
+            "y": 6
+          },
+          "datasource": {
+            "type": "loki",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "sum by (pod) (count_over_time({namespace=\"$namespace\", container=~\"$container\", pod=~\"$pod\"} |~ \"(?i)error|warning|warn|fatal|panic|exception|critical|\"level\":40|\"level\":50|\"level\":60|\"s\":\"E\"|\"s\":\"W\"|\"s\":\"F\"\"[$__range]))",
+              "refId": "A",
+              "legendFormat": "{{pod}}",
+              "queryType": "instant"
+            }
+          ],
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "right",
+              "values": [
+                "value",
+                "percent"
+              ]
+            }
+          }
+        },
+        {
+          "id": 102,
+          "type": "row",
+          "title": "Tendance des erreurs",
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 14
+          },
+          "collapsed": false,
+          "panels": []
+        },
+        {
+          "id": 7,
+          "title": "Taux d'erreurs/warnings par service",
+          "type": "timeseries",
+          "description": "Fréquence des erreurs/warnings par service sur des fenêtres de 1 minute. Vide = aucune erreur détectée.",
+          "gridPos": {
+            "h": 8,
+            "w": 24,
+            "x": 0,
+            "y": 15
+          },
+          "datasource": {
+            "type": "loki",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "expr": "sum by (container) (count_over_time({namespace=\"$namespace\", container=~\"$container\", pod=~\"$pod\"} |~ \"(?i)error|warning|warn|fatal|panic|exception|critical|\"level\":40|\"level\":50|\"level\":60|\"s\":\"E\"|\"s\":\"W\"|\"s\":\"F\"\"[1m]))",
+              "refId": "A",
+              "legendFormat": "{{container}}",
+              "queryType": "range"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "custom": {
+                "drawStyle": "line",
+                "fillOpacity": 10
+              }
+            }
+          }
+        },
+        {
+          "id": 103,
+          "type": "row",
+          "title": "Erreurs en direct",
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 23
+          },
+          "collapsed": false,
+          "panels": []
+        },
+        {
+          "id": 8,
+          "title": "Live logs — erreurs & warnings (auto)",
+          "type": "logs",
+          "description": "Dernières erreurs/warnings détectées. Vide = aucune erreur sur la période.",
+          "gridPos": {
+            "h": 8,
+            "w": 24,
+            "x": 0,
+            "y": 24
+          },
+          "datasource": {
+            "type": "loki",
+            "uid": "$datasource"
+          },
+          "options": {
+            "showLabels": true,
+            "showTime": true,
+            "sortOrder": "Descending",
+            "wrapLogMessage": true
+          },
+          "targets": [
+            {
+              "expr": "{namespace=\"$namespace\", container=~\"$container\", pod=~\"$pod\"} |~ \"(?i)error|warning|warn|fatal|panic|exception|critical|\"level\":40|\"level\":50|\"level\":60|\"s\":\"E\"|\"s\":\"W\"|\"s\":\"F\"\"",
+              "refId": "A",
+              "queryType": "range",
+              "maxLines": 500
+            }
+          ]
+        },
+        {
+          "id": 104,
+          "type": "row",
+          "title": "Recherche libre (debug ad hoc)",
+          "gridPos": {
+            "h": 1,
+            "w": 24,
+            "x": 0,
+            "y": 32
+          },
+          "collapsed": false,
+          "panels": []
+        },
+        {
+          "id": 9,
+          "title": "Live logs — recherche libre \"$searchable_pattern\"",
+          "type": "logs",
+          "description": "Recherche ad hoc dans les logs. La valeur par défaut .* affiche toutes les lignes correspondant aux filtres Service/Pod.",
+          "gridPos": {
+            "h": 8,
+            "w": 24,
+            "x": 0,
+            "y": 33
+          },
+          "datasource": {
+            "type": "loki",
+            "uid": "$datasource"
+          },
+          "options": {
+            "showLabels": true,
+            "showTime": true,
+            "sortOrder": "Descending",
+            "wrapLogMessage": true
+          },
+          "targets": [
+            {
+              "expr": "{namespace=\"$namespace\", container=~\"$container\", pod=~\"$pod\"} |~ \"$searchable_pattern\"",
+              "refId": "A",
+              "queryType": "range",
+              "maxLines": 500
+            }
+          ]
+        }
+      ]
+    }

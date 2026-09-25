@@ -1,0 +1,171 @@
+# Règles d'alerte infrastructure cluster — gérées dans le namespace monitoring.
+# Ces règles sont évaluées par Prometheus toutes les ~15s et déclenchent
+# des alertes vers Alertmanager si les conditions sont remplies pendant
+# la durée indiquée dans "for".
+#
+# Alertes définies :
+#   NODE :
+#     - NodeCPUHigh      → CPU > 85% pendant 5 min          (warning)
+#     - NodeMemoryHigh   → RAM > 85% pendant 5 min          (warning)
+#     - NodeDiskHigh     → Disk > 80% pendant 5 min         (warning)
+#     - NodeDiskCritical → Disk > 90% pendant 2 min         (critical)
+#   PODS :
+#     - PodCrashLoopBackOff → container en CrashLoop 2 min  (critical)
+#     - PodNotReady         → pod non Ready 5 min           (warning)
+#     - PodOOMKilled        → container tué par OOM         (warning)
+#   TLS (nécessite blackbox_exporter — cf. application-blackbox-exporter.yaml
+#        et probes-tls.yaml) :
+#     - TLSCertExpiringSoon → cert expire dans < 15j         (warning)
+#     - TLSCertExpiringSoonCritical → cert expire dans < 3j  (critical)
+#     - TLSProbeFailed      → probe HTTPS en échec 10 min    (critical)
+#
+# Vérification post-apply :
+#   kubectl get prometheusrule infra-alerts -n monitoring
+#   → dans Grafana : Alerting → Alert Rules → chercher "infra-alerts"
+
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: infra-alerts
+  namespace: monitoring
+  labels:
+    # Ces labels sont requis pour que Prometheus détecte cette règle
+    # (ruleSelectorNilUsesHelmValues: false dans application-prometheus.yaml
+    #  → Prometheus scrape toutes les PrometheusRule du cluster)
+    app: kube-prometheus-stack
+    release: prometheus
+spec:
+  groups:
+    # -----------------------------------------------------------------------
+    # NODE — métriques système via node-exporter (DaemonSet)
+    # -----------------------------------------------------------------------
+    - name: node.rules
+      rules:
+        # CPU : calcul du taux d'utilisation = 1 - idle
+        - alert: NodeCPUHigh
+          expr: |
+            (1 - avg by(instance) (rate(node_cpu_seconds_total{mode="idle"}[5m]))) * 100 > 85
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "CPU élevé sur {{ $labels.instance }}"
+            description: "CPU à {{ $value | printf \"%.0f\" }}% depuis 5 min sur {{ $labels.instance }}"
+
+        # RAM : (total - disponible) / total
+        - alert: NodeMemoryHigh
+          expr: |
+            (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) * 100 > 85
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "RAM élevée sur {{ $labels.instance }}"
+            description: "RAM à {{ $value | printf \"%.0f\" }}% depuis 5 min sur {{ $labels.instance }}"
+
+        # Disk warning — exclut tmpfs et overlay (layers Docker, pas de vrai stockage)
+        - alert: NodeDiskHigh
+          expr: |
+            (1 - (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{fstype!~"tmpfs|overlay"})) * 100 > 80
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Disk élevé sur {{ $labels.instance }}"
+            description: "Disque à {{ $value | printf \"%.0f\" }}% sur {{ $labels.mountpoint }} ({{ $labels.instance }})"
+
+        # Disk critical — seuil plus haut, délai plus court (2 min)
+        - alert: NodeDiskCritical
+          expr: |
+            (1 - (node_filesystem_avail_bytes{fstype!~"tmpfs|overlay"} / node_filesystem_size_bytes{fstype!~"tmpfs|overlay"})) * 100 > 90
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Disk critique sur {{ $labels.instance }}"
+            description: "Disque à {{ $value | printf \"%.0f\" }}% sur {{ $labels.mountpoint }} — action immédiate requise"
+
+    # -----------------------------------------------------------------------
+    # PODS — métriques Kubernetes via kube-state-metrics
+    # -----------------------------------------------------------------------
+    - name: pod.rules
+      rules:
+        # CrashLoopBackOff : container qui redémarre en boucle
+        # kube_pod_container_status_waiting_reason == 1 signifie que c'est la raison active
+        - alert: PodCrashLoopBackOff
+          expr: |
+            kube_pod_container_status_waiting_reason{reason="CrashLoopBackOff"} == 1
+          for: 2m
+          labels:
+            severity: critical
+          annotations:
+            summary: "CrashLoopBackOff — {{ $labels.namespace }}/{{ $labels.pod }}"
+            description: "Le container {{ $labels.container }} est en CrashLoopBackOff dans {{ $labels.namespace }}/{{ $labels.pod }}"
+
+        # Pod non Ready : phase Running/Pending mais readiness probe KO
+        # "and on()" = jointure pour éviter les faux positifs sur pods terminés
+        - alert: PodNotReady
+          expr: |
+            kube_pod_status_ready{condition="true"} == 0
+            and on(namespace, pod)
+            kube_pod_status_phase{phase=~"Pending|Running"} == 1
+          for: 5m
+          labels:
+            severity: warning
+          annotations:
+            summary: "Pod non prêt — {{ $labels.namespace }}/{{ $labels.pod }}"
+            description: "Le pod {{ $labels.namespace }}/{{ $labels.pod }} n'est pas Ready depuis 5 min"
+
+        # OOMKilled : container tué par le kernel (manque de RAM)
+        # for: 0m = alerte immédiate, pas besoin d'attendre (événement ponctuel)
+        - alert: PodOOMKilled
+          expr: |
+            kube_pod_container_status_last_terminated_reason{reason="OOMKilled"} == 1
+          for: 0m
+          labels:
+            severity: warning
+          annotations:
+            summary: "OOMKilled — {{ $labels.namespace }}/{{ $labels.pod }}"
+            description: "Le container {{ $labels.container }} a été tué par OOM dans {{ $labels.namespace }}/{{ $labels.pod }}"
+
+    # -----------------------------------------------------------------------
+    # TLS — via blackbox_exporter (probe_ssl_earliest_cert_expiry, probe_success)
+    # Détecte un renouvellement ACME silencieusement échoué (rate-limit LE,
+    # volume acme.json corrompu/plein, DNS cassé) avant que le cert n'expire.
+    # -----------------------------------------------------------------------
+    - name: tls.rules
+      rules:
+        # Fenêtre large (15j) : ACME renouvelle normalement ~30j avant
+        # expiration, donc si on est déjà sous 15j c'est que le renouvellement
+        # automatique a probablement déjà échoué une première fois.
+        - alert: TLSCertExpiringSoon
+          expr: |
+            (probe_ssl_earliest_cert_expiry{job="tls-probe"} - time()) / 86400 < 15
+          for: 1h
+          labels:
+            severity: warning
+          annotations:
+            summary: "Certificat TLS expire bientôt — {{ $labels.instance }}"
+            description: "Le certificat de {{ $labels.instance }} expire dans {{ $value | printf \"%.0f\" }} jours. Vérifier le renouvellement ACME Traefik (acme.json)."
+
+        # Seuil critique rapproché de l'échéance réelle
+        - alert: TLSCertExpiringSoonCritical
+          expr: |
+            (probe_ssl_earliest_cert_expiry{job="tls-probe"} - time()) / 86400 < 3
+          for: 15m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Certificat TLS expire sous 3 jours — {{ $labels.instance }}"
+            description: "Le certificat de {{ $labels.instance }} expire dans {{ $value | printf \"%.0f\" }} jours — action immédiate requise."
+
+        # Probe HTTPS en échec (handshake TLS KO, DNS, timeout, code HTTP inattendu...)
+        - alert: TLSProbeFailed
+          expr: |
+            probe_success{job="tls-probe"} == 0
+          for: 10m
+          labels:
+            severity: critical
+          annotations:
+            summary: "Probe HTTPS en échec — {{ $labels.instance }}"
+            description: "Le endpoint {{ $labels.instance }} ne répond plus correctement en HTTPS depuis 10 min."

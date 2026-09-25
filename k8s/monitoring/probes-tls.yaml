@@ -1,0 +1,35 @@
+# Sonde HTTPS des domaines exposés via Traefik, pour surveiller la validité
+# du certificat TLS (expiration, chaîne cassée, échec de renouvellement ACME).
+#
+# Consommé par prometheus (serviceMonitorSelectorNilUsesHelmValues: false
+# donc les CRD Probe du cluster sont scrapées sans filtre par label — cf.
+# application-prometheus.yaml).
+#
+# IMPORTANT — avant apply : vérifier le nom réel du service blackbox_exporter
+#   kubectl get svc -n monitoring | grep blackbox
+# et ajuster spec.prober.url ci-dessous si besoin (le nom exact dépend du
+# helper "fullname" du chart, généralement "blackbox-exporter" ou
+# "blackbox-exporter-prometheus-blackbox-exporter").
+
+apiVersion: monitoring.coreos.com/v1
+kind: Probe
+metadata:
+  name: app-tls
+  namespace: monitoring
+  labels:
+    release: prometheus
+spec:
+  jobName: tls-probe
+  interval: 1h
+  scrapeTimeout: 10s
+  module: http_2xx
+  prober:
+    url: blackbox-exporter.monitoring.svc:9115
+  targets:
+    staticConfig:
+      static:
+        - https://example.com
+        - https://grafana.example.com
+        - https://argocd.example.com
+      labels:
+        app: app

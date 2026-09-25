@@ -1,0 +1,105 @@
+# Installe Loki (agrégation logs) + Promtail (collecte logs sur les pods)
+# via ArgoCD — même pattern que kube-prometheus-stack.
+#
+# Promtail est un DaemonSet : 1 pod par node, collecte les logs de tous
+# les containers et les envoie à Loki.
+# Grafana (installé par prometheus-stack) se connecte à Loki via
+# la datasource déclarée dans application-prometheus.yaml.
+#
+# Ordre de déploiement :
+#   1. application-prometheus.yaml  ← installe Grafana + Prometheus
+#   2. application-loki.yaml        ← installe Loki + Promtail
+#   3. chart applicatif (app-helm) ← s'y branche via ServiceMonitor
+#
+# Vérification post-install :
+#   kubectl get pods -n monitoring | grep loki
+#   kubectl get pods -n monitoring | grep promtail
+#
+# Tester dans Grafana :
+#   Explore → datasource Loki → label "namespace" → "app"
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: loki-stack
+  namespace: argocd
+  labels:
+    layer: infra
+    app: monitoring
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://grafana.github.io/helm-charts
+    chart: loki-stack
+    targetRevision: "2.10.3"
+    helm:
+      values: |
+        # Loki — stockage local (filesystem), suffisant pour un mono-node
+        loki:
+          enabled: true
+          persistence:
+            enabled: true
+            size: 10Gi
+            accessModes:
+              - ReadWriteOnce
+          config:
+            limits_config:
+              retention_period: 72h
+              ingestion_rate_mb: 4
+              ingestion_burst_size_mb: 8
+            query_scheduler:
+              # Défaut = 100, pensé pour un cluster multi-réplicas (frontend/querier
+              # séparés). Ici single-binary (replication_factor: 1), une seule
+              # instance absorbe tout : sur des requêtes larges (plage longue,
+              # filtre |~ sur namespace entier), la queue sature et Grafana
+              # reçoit un timeout HTTP (~30s) avant que Loki ait fini.
+              max_outstanding_requests_per_tenant: 2048
+          resources:
+            requests:
+              cpu: 50m
+              memory: 128Mi
+            limits:
+              cpu: 200m
+              memory: 384Mi
+
+        # Promtail — labels Kubernetes enrichis automatiquement par le chart
+        promtail:
+          enabled: true
+          resources:
+            requests:
+              cpu: 25m
+              memory: 64Mi
+            limits:
+              cpu: 100m
+              memory: 128Mi
+
+        # Grafana désactivé déjà installé par kube-prometheus-stack
+        grafana:
+          enabled: false
+          datasources:
+            enabled: false
+
+        # Prometheus désactivé déjà installé par kube-prometheus-stack
+        prometheus:
+          enabled: false
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+
+  ignoreDifferences:
+    - group: apps
+      kind: StatefulSet
+      jsonPointers:
+        - /spec/volumeClaimTemplates

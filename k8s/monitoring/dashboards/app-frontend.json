@@ -1,0 +1,190 @@
+{
+  "title": "App / Frontend (Nginx)",
+  "uid": "app-frontend",
+  "tags": ["app", "frontend", "nginx"],
+  "timezone": "browser",
+  "editable": true,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "templating": {
+    "list": [
+      {
+        "name": "datasource",
+        "type": "datasource",
+        "query": "prometheus",
+        "current": { "text": "prometheus", "value": "prometheus" }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Frontend Up",
+      "gridPos": { "h": 6, "w": 5, "x": 0, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "expr": "up{namespace=\"app\", job=\"frontend\"}",
+          "legendFormat": "{{ pod }}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "mappings": [
+            { "type": "value", "options": { "0": { "text": "DOWN", "color": "red" } } },
+            { "type": "value", "options": { "1": { "text": "UP", "color": "green" } } }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "value": 0, "color": "red" },
+              { "value": 1, "color": "green" }
+            ]
+          }
+        }
+      },
+      "options": { "textMode": "value_and_name", "colorMode": "background" }
+    },
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Connexions actives",
+      "gridPos": { "h": 6, "w": 4, "x": 5, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "expr": "sum(nginx_connections_active{namespace=\"app\"})" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "value": 0, "color": "green" },
+              { "value": 800, "color": "yellow" },
+              { "value": 950, "color": "red" }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "Requêtes / sec",
+      "gridPos": { "h": 6, "w": 5, "x": 9, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "expr": "sum(rate(nginx_http_requests_total{namespace=\"app\"}[5m]))" }
+      ],
+      "fieldConfig": {
+        "defaults": { "unit": "reqps", "thresholds": { "mode": "absolute", "steps": [{ "value": 0, "color": "green" }] } }
+      }
+    },
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Connexions acceptées / sec",
+      "gridPos": { "h": 6, "w": 5, "x": 14, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "expr": "sum(rate(nginx_connections_accepted{namespace=\"app\"}[5m]))" }
+      ],
+      "fieldConfig": {
+        "defaults": { "thresholds": { "mode": "absolute", "steps": [{ "value": 0, "color": "green" }] } }
+      }
+    },
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Redémarrages pod frontend (1h)",
+      "gridPos": { "h": 6, "w": 3, "x": 19, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "expr": "sum(increase(kube_pod_container_status_restarts_total{namespace=\"app\", pod=~\"frontend-.*\"}[1h]))" }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "value": 0, "color": "green" },
+              { "value": 1, "color": "yellow" },
+              { "value": 3, "color": "red" }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Réplicas prêts",
+      "gridPos": { "h": 6, "w": 2, "x": 22, "y": 0 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "expr": "kube_deployment_status_replicas_ready{namespace=\"app\", deployment=\"frontend\"}" }
+      ],
+      "fieldConfig": {
+        "defaults": { "thresholds": { "mode": "absolute", "steps": [{ "value": 0, "color": "green" }] } }
+      }
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Connexions par état (reading / writing / waiting)",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        { "expr": "sum(nginx_connections_reading{namespace=\"app\"})", "legendFormat": "reading" },
+        { "expr": "sum(nginx_connections_writing{namespace=\"app\"})", "legendFormat": "writing" },
+        { "expr": "sum(nginx_connections_waiting{namespace=\"app\"})", "legendFormat": "waiting" }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "Requêtes / sec (par pod)",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 6 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "expr": "sum by (pod) (rate(nginx_http_requests_total{namespace=\"app\"}[5m]))",
+          "legendFormat": "{{ pod }}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "reqps" } }
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "CPU frontend (par pod)",
+      "gridPos": { "h": 9, "w": 12, "x": 0, "y": 15 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "expr": "sum by (pod) (rate(container_cpu_usage_seconds_total{namespace=\"app\", pod=~\"frontend-.*\", container=\"frontend\"}[5m]))",
+          "legendFormat": "{{ pod }}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "short" } }
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "Mémoire frontend (par pod)",
+      "gridPos": { "h": 9, "w": 12, "x": 12, "y": 15 },
+      "datasource": { "type": "prometheus", "uid": "${datasource}" },
+      "targets": [
+        {
+          "expr": "sum by (pod) (container_memory_working_set_bytes{namespace=\"app\", pod=~\"frontend-.*\", container=\"frontend\"})",
+          "legendFormat": "{{ pod }}"
+        }
+      ],
+      "fieldConfig": { "defaults": { "unit": "bytes" } }
+    }
+  ],
+  "schemaVersion": 39,
+  "version": 1
+}

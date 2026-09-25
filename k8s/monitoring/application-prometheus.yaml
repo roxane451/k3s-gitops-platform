@@ -1,0 +1,230 @@
+# Installe kube-prometheus-stack via ArgoCD (Prometheus + Grafana + Alertmanager)
+# C'est ce chart qui installe les CRDs Prometheus (PrometheusRule, ServiceMonitor…)
+# > doit être déployé AVANT le chart applicatif (app-helm)
+#
+# Vérification post-install :
+#   kubectl get pods -n monitoring
+#   kubectl get crd | grep monitoring.coreos.com
+#   → doit lister ~12 CRDs
+#
+# Accès Grafana :
+#   https://grafana.example.com  (admin / mot de passe dans Infisical)
+
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kube-prometheus-stack
+  namespace: argocd
+  labels:
+    layer: infra
+    app: monitoring
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+
+  source:
+    repoURL: https://prometheus-community.github.io/helm-charts
+    chart: kube-prometheus-stack
+    targetRevision: "86.2.0"
+    helm:
+      values: |
+        fullnameOverride: prometheus
+
+        crds:
+          # installation explicite des CRDs via le chart
+          # Sans ça, ArgoCD peut les skipper selon sa config globale
+          enabled: true
+
+        # =======================================================================
+        # GRAFANA
+        # =======================================================================
+        grafana:
+          enabled: true
+          admin:
+            existingSecret: grafana-admin-secret
+            # clé user manquante (défaut Grafana = "admin-user")
+            userKey: admin-user
+            passwordKey: admin-password
+          defaultDashboardsTimezone: Europe/Paris
+          ingress:
+            enabled: true
+            ingressClassName: traefik
+            annotations:
+              traefik.ingress.kubernetes.io/router.entrypoints: websecure
+              traefik.ingress.kubernetes.io/router.tls.certresolver: letsencrypt
+            hosts:
+              - grafana.example.com
+            tls:
+              - secretName: grafana-tls
+                hosts:
+                  - grafana.example.com
+          persistence:
+            enabled: true
+            size: 1Gi
+            storageClassName: local-path
+          sidecar:
+            datasources:
+              # false car on gère les datasources manuellement via additionalDataSources
+              enabled: false
+              defaultDatasourceEnabled: false
+            dashboards:
+              # true → le sidecar surveille les ConfigMaps labellisées "grafana_dashboard: '1'"
+              # dans tout le cluster et les charge automatiquement (GitOps friendly,
+              # pas besoin de coller le JSON dans les values Helm).
+              # Utilisé par k8s/monitoring/grafana-dashboards-configmap.yaml
+              # (dashboards custom app-backend / app-mongodb).
+              enabled: true
+              label: grafana_dashboard
+              labelValue: "1"
+              # range sur tout le cluster : les ConfigMaps vivent dans "monitoring"
+              searchNamespace: ALL
+              # respecte l'annotation grafana_folder pour ranger les dashboards
+              # custom dans un dossier "Application" séparé des dashboards importés
+              folderAnnotation: grafana_folder
+              provider:
+                foldersFromFilesStructure: false
+          additionalDataSources:
+            - name: Prometheus
+              type: prometheus
+              # Le service headless du StatefulSet Prometheus s'appelle :
+              # prometheus-operated.monitoring.svc.cluster.local:9090
+              url: http://prometheus-operated.monitoring.svc.cluster.local:9090
+              access: proxy
+              isDefault: true
+            - name: Loki
+              type: loki
+              # vérifier avec : kubectl get svc -n monitoring | grep loki
+              url: http://loki.monitoring.svc.cluster.local:3100
+              access: proxy
+              isDefault: false
+          dashboardProviders:
+            dashboardproviders.yaml:
+              apiVersion: 1
+              providers:
+                - name: default
+                  folder: ''
+                  type: file
+                  disableDeletion: false
+                  editable: true
+                  options:
+                    path: /var/lib/grafana/dashboards/default
+          dashboards:
+            default:
+              kubernetes-cluster:
+                gnetId: 15661
+                revision: 1
+                datasource: Prometheus
+              k3s:
+                gnetId: 15759
+                revision: 1
+                datasource: Prometheus
+              node-exporter:
+                gnetId: 1860
+                revision: 1
+                datasource: Prometheus
+              # loki-logs (gnetId 12611) retiré : utilise container_name/pod_name,
+              # labels absents sur ce cluster (Promtail expose container/pod).
+              # Remplacé par le dashboard custom "App / Logs (Loki)"
+              # (ConfigMap grafana-dashboard-app-loki, uid app-loki-logs)
+              # provisionné via le sidecar (grafana_dashboard: "1").
+          resources:
+            requests:
+              cpu: 100m
+              memory: 384Mi
+            limits:
+              cpu: 500m
+              memory: 768Mi
+
+        # =======================================================================
+        # PROMETHEUS
+        # =======================================================================
+        prometheus:
+          prometheusSpec:
+            retention: 7d
+            # Scrape tous les ServiceMonitors/PodMonitors/Rules du cluster
+            serviceMonitorSelectorNilUsesHelmValues: false
+            podMonitorSelectorNilUsesHelmValues: false
+            ruleSelectorNilUsesHelmValues: false
+            storageSpec:
+              volumeClaimTemplate:
+                spec:
+                  storageClassName: local-path   # storageClass explicite (K3s = local-path)
+                  accessModes: ["ReadWriteOnce"]
+                  resources:
+                    requests:
+                      storage: 10Gi
+            resources:
+              requests:
+                cpu: 200m
+                memory: 512Mi
+              limits:
+                cpu: 500m
+                memory: 1536Mi
+            # securityContext requis en environnement restricted (K3s PSS)
+            securityContext:
+              runAsNonRoot: true
+              runAsUser: 1000
+              runAsGroup: 1000
+              fsGroup: 2000
+              seccompProfile:
+                type: RuntimeDefault
+
+        # =======================================================================
+        # ALERTMANAGER
+        # =======================================================================
+        alertmanager:
+          enabled: true
+          alertmanagerSpec:
+            alertmanagerConfigSelector: {}
+            configSecret: alertmanager-slack-secret
+            resources:
+              requests:
+                cpu: 25m
+                memory: 64Mi
+              limits:
+                cpu: 100m
+                memory: 128Mi
+
+        # =======================================================================
+        # COMPOSANTS CLUSTER
+        # =======================================================================
+        kube-state-metrics:
+          enabled: true
+        prometheus-node-exporter:
+          enabled: true
+
+        # composants non exposés sur K3s > désactiver pour éviter les
+        # erreurs "connection refused" dans les targets Prometheus
+        kubeControllerManager:
+          enabled: false
+        kubeEtcd:
+          enabled: false
+        kubeScheduler:
+          enabled: false
+        kubeProxy:
+          enabled: false
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: monitoring
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+      - Replace=false
+
+  ignoreDifferences:
+    - group: apiextensions.k8s.io
+      kind: CustomResourceDefinition
+      jqPathExpressions:
+        - .metadata.annotations
+        - .spec.conversion.webhook.clientConfig.caBundle
+    - group: admissionregistration.k8s.io
+      kind: ValidatingWebhookConfiguration
+      jqPathExpressions:
+        - .webhooks[].clientConfig.caBundle
