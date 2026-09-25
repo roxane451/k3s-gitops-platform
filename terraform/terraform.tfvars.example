@@ -1,0 +1,14 @@
+# Variables NON sensibles uniquement.
+# Les credentials OVH (TF_VAR_ovh_app_key, TF_VAR_ovh_app_secret,
+# TF_VAR_ovh_consumer_key) sont injectés par `infisical run` : ne pas les
+# renseigner ici.
+
+domain_name          = "example.com"
+production_public_ip = "203.0.113.20" # IP publique du VPS
+# preprod_public_ip  = "203.0.113.10" # optionnel, sinon = production_public_ip
+
+# Provisioning d'un nouveau VPS (commande payante) — laisser à false
+create_new_vps = false
+# vps_display_name        = "app-node-2"
+# vps_plan_code           = "vps-2025-model1"
+# vps_datacenter          = "GRA"
