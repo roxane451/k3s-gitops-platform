@@ -1,0 +1,80 @@
+# k8s/argocd/ingress.yaml
+#
+# Exposition ArgoCD via Traefik sur argocd.example.com
+# Accès restreint à l'IP d'administration (ADMIN_CIDR), non versionnée.
+#
+# Prérequis :
+#   - ArgoCD installé dans le namespace argocd
+#   - DNS argocd.example.com créé via Terraform
+#
+# Apply :
+#   export ADMIN_CIDR=<IP_ADMIN>/32
+#   envsubst '${ADMIN_CIDR}' < k8s/argocd/ingress.yaml | kubectl apply -f -
+
+---
+# Middleware IP allowlist — IP d'administration uniquement
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: argocd-ipwhitelist
+  namespace: argocd
+spec:
+  ipAllowList:
+    sourceRange:
+      - ${ADMIN_CIDR}
+
+---
+# Middleware HTTPS redirect
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: argocd-https-redirect
+  namespace: argocd
+spec:
+  redirectScheme:
+    scheme: https
+    permanent: true
+
+---
+# IngressRoute ArgoCD (HTTPS)
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: argocd-server
+  namespace: argocd
+  annotations:
+    kubernetes.io/ingress.class: traefik
+spec:
+  entryPoints:
+    - websecure
+  routes:
+    - match: Host(`argocd.example.com`)
+      kind: Rule
+      middlewares:
+        - name: argocd-ipwhitelist
+          namespace: argocd
+      services:
+        - name: argocd-server
+          port: 80
+  tls:
+    certResolver: letsencrypt
+
+---
+# IngressRoute ArgoCD (HTTP → HTTPS redirect)
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: argocd-server-http
+  namespace: argocd
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: Host(`argocd.example.com`)
+      kind: Rule
+      middlewares:
+        - name: argocd-https-redirect
+          namespace: argocd
+      services:
+        - name: argocd-server
+          port: 80

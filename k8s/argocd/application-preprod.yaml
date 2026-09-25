@@ -1,0 +1,47 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: app-preprod
+  namespace: argocd
+  labels:
+    environment: preprod
+    app: app
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/<GITHUB_USER>/app-helm.git
+    targetRevision: main
+    path: helm
+    helm:
+      valueFiles:
+        - values-k3s-base.yaml
+        - values-preprod.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: app-preprod
+  syncPolicy:
+    automated:
+      enabled: true
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+
+  ignoreDifferences:
+    # Champs injectés automatiquement par l'ESO après déploiement
+    - group: external-secrets.io
+      kind: ExternalSecret
+      jqPathExpressions:
+        - .spec.data[].remoteRef.conversionStrategy
+        - .spec.data[].remoteRef.decodingStrategy
+        - .spec.data[].remoteRef.metadataPolicy
+        - .spec.data[].remoteRef.nullBytePolicy
+    # Champs injectés par K8s sur les StatefulSet
+    - group: apps
+      kind: StatefulSet
+      jsonPointers:
+        - /spec/volumeClaimTemplates/0/apiVersion
+        - /spec/volumeClaimTemplates/0/kind
