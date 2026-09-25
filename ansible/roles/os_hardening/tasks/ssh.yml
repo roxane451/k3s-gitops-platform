@@ -1,0 +1,45 @@
+---
+# Sauvegarde du fichier original avant modification (idempotente)
+- name: Backup original sshd_config (once)
+  ansible.builtin.copy:
+    src: /etc/ssh/sshd_config
+    dest: /etc/ssh/sshd_config.orig
+    remote_src: true
+    force: false
+    mode: "0600"
+
+- name: Harden sshd_config
+  ansible.builtin.lineinfile:
+    path: /etc/ssh/sshd_config
+    regexp: "{{ item.regexp }}"
+    line: "{{ item.line }}"
+    state: present
+    validate: "sshd -t -f %s"
+  loop:
+    # Désactiver l'authentification par mot de passe — clé SSH obligatoire
+    - { regexp: '^#?PasswordAuthentication', line: 'PasswordAuthentication {{ os_hardening_ssh_password_auth }}' }
+    # Interdire la connexion directe en root
+    - { regexp: '^#?PermitRootLogin', line: 'PermitRootLogin {{ os_hardening_ssh_permit_root_login }}' }
+    # Déconnexion automatique après inactivité
+    - { regexp: '^#?ClientAliveInterval', line: 'ClientAliveInterval {{ os_hardening_ssh_client_alive_interval }}' }
+    - { regexp: '^#?ClientAliveCountMax', line: 'ClientAliveCountMax {{ os_hardening_ssh_client_alive_count_max }}' }
+    # Désactiver l'authentification par challenge/réponse
+    # ChallengeResponseAuthentication : OpenSSH < 9 (Debian 11 Bullseye)
+    # KbdInteractiveAuthentication    : OpenSSH ≥ 9 (Debian 12 Bookworm) — directive de remplacement
+    - { regexp: '^#?ChallengeResponseAuthentication', line: 'ChallengeResponseAuthentication no' }
+    - { regexp: '^#?KbdInteractiveAuthentication', line: 'KbdInteractiveAuthentication no' }
+    # Désactiver le forwarding X11 (inutile sur un serveur)
+    - { regexp: '^#?X11Forwarding', line: 'X11Forwarding no' }
+    # Limiter les tentatives d'authentification par connexion
+    - { regexp: '^#?MaxAuthTries', line: 'MaxAuthTries 3' }
+    # Désactiver les fichiers .rhosts (vieille méthode d'auth non sécurisée)
+    - { regexp: '^#?IgnoreRhosts', line: 'IgnoreRhosts yes' }
+    # Port SSH
+    - { regexp: '^#?Port ', line: 'Port {{ os_hardening_ssh_port }}' }
+  notify: Restart sshd
+
+- name: Ensure sshd is enabled and started
+  ansible.builtin.systemd:
+    name: ssh
+    enabled: true
+    state: started

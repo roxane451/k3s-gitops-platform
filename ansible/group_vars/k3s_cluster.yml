@@ -1,0 +1,31 @@
+---
+ansible_python_interpreter: /usr/bin/python3
+k3s_become: true
+# ── SSH ────────────────────────────────────────────────────────
+# Port SSH après hardening (22 → 2222)
+# Premier run : ansible_port doit être 22
+# Après hardening : passer ansible_port à 2222
+os_hardening_ssh_port: 2222
+
+# ── K3s ────────────────────────────────────────────────────────
+# Version K3s — vérifier les releases : https://github.com/k3s-io/k3s/releases
+k3s_release_version: v1.31.4+k3s1
+
+k3s_install_dir: /usr/local/bin
+k3s_config_dir: /etc/rancher/k3s
+k3s_data_dir: /var/lib/rancher/k3s
+
+k3s_control_node: true   # indique que ce nœud est un control plane
+k3s_server: {}           # config dict vide = utiliser les défauts
+
+# kubeconfig local récupéré après install
+k3s_kubeconfig_local_path: "~/.kube/config-{{ inventory_hostname }}"
+
+# ── devsec.hardening ───────────────────────────────────────────
+# ip_forward requis par K3s (Flannel CNI)
+sysctl_overwrite:
+  net.ipv4.ip_forward: 1
+  net.ipv6.conf.all.forwarding: 1
+
+# Pas de gestion PAM complexe sur VPS solo
+os_auth_pam_passwdqc_enable: false

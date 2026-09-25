@@ -1,0 +1,18 @@
+---
+# Dépendances Galaxy du projet (rôles + collections).
+# Installation : ansible-galaxy install -r requirements.yml
+# Les rôles sont installés dans ./roles (cf. ansible.cfg) et ignorés par Git.
+
+roles:
+  - src: xanmanning.k3s
+    name: k3s
+    version: v3.6.2
+
+collections:
+  - name: devsec.hardening
+    version: "10.5.2"
+  - name: kubernetes.core
+    version: "3.1.0"
+  # Module community.general.ufw utilisé par le rôle os_hardening
+  - name: community.general
+    version: ">=8.0.0"

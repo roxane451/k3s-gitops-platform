@@ -1,0 +1,40 @@
+---
+# =============================================================================
+# Inventaire Ansible — VPS unique (préprod + prod en namespaces sur le même nœud)
+# =============================================================================
+#
+# L'IP du VPS n'est pas versionnée : elle est lue dans la variable
+# d'environnement OVH_VPS_IP.
+#
+#   export OVH_VPS_IP=<IP_DU_VPS>
+#   export ADMIN_CIDR=<IP_ADMIN>/32
+#
+# Ordre de déploiement complet et commandes : voir DEPLOY_PRODUCTION.md.
+#   1. Terraform (DNS)
+#   2. ansible-playbook playbook-bootstrap.yml --tags bootstrap
+#   3. playbook-k3s.yml --tags hardening   (premier run sur le port 22)
+#   4. playbook-k3s.yml --tags k3s         (port 2222 ensuite)
+#   5. playbook-k3s.yml --tags eso
+#   6. playbook-k3s.yml --tags infisical
+#   7. Traefik TLS, ArgoCD, monitoring
+# =============================================================================
+
+all:
+  vars:
+    ovh_vps_ip: "{{ lookup('ansible.builtin.env', 'OVH_VPS_IP') }}"
+  children:
+    k3s_cluster:
+      hosts:
+        ovh_vps:
+          ansible_host: "{{ ovh_vps_ip }}"
+          ansible_user: debian
+          ansible_port: 2222
+          deploy_environment: shared-single-vps
+
+    preprod:
+      hosts:
+        ovh_vps:
+
+    production:
+      hosts:
+        ovh_vps:

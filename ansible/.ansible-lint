@@ -1,0 +1,10 @@
+---
+profile: production
+
+exclude_paths:
+  - roles/k3s/            # rôle Galaxy installé via requirements.yml
+  - collections/
+  - ~/.ansible/
+
+# Rôles/collections tiers installés en CI avant le lint
+offline: true

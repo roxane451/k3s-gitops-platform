@@ -1,0 +1,11 @@
+---
+- name: Restart sshd
+  ansible.builtin.systemd:
+    # Debian/Ubuntu : service "ssh" — RHEL/CentOS : service "sshd"
+    name: ssh
+    state: restarted
+
+- name: Restart fail2ban
+  ansible.builtin.systemd:
+    name: fail2ban
+    state: restarted

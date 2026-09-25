@@ -1,0 +1,35 @@
+# jail.local — Fail2ban configuration
+# Géré par Ansible (rôle os_hardening) — ne pas éditer manuellement
+
+[DEFAULT]
+# Durée du ban
+bantime  = {{ os_hardening_fail2ban_bantime }}
+
+# Fenêtre de détection
+findtime = {{ os_hardening_fail2ban_findtime }}
+
+# Nombre d'échecs avant ban
+maxretry = {{ os_hardening_fail2ban_maxretry }}
+
+# Backend de détection — auto choisit le plus adapté (systemd sur Debian 11+)
+backend = auto
+
+# Action par défaut : bannir via iptables (mode aggressif : drop)
+banaction = iptables-multiport
+banaction_allports = iptables-allports
+
+# Ne pas baner certaines IPs (loopback + optionnellement admin CIDR)
+{% if os_hardening_admin_cidr != '' %}
+ignoreip = 127.0.0.1/8 ::1 {{ os_hardening_admin_cidr }}
+{% else %}
+ignoreip = 127.0.0.1/8 ::1
+{% endif %}
+
+# ── SSH ────────────────────────────────────────────────────────────────────
+[sshd]
+enabled  = true
+port     = {{ os_hardening_ssh_port }}
+filter   = sshd
+logpath  = %(sshd_log)s
+maxretry = {{ os_hardening_fail2ban_maxretry }}
+bantime  = {{ os_hardening_fail2ban_bantime }}

@@ -1,0 +1,57 @@
+---
+# ── Paquets à installer ────────────────────────────────────────────────────
+os_hardening_packages:
+  - fail2ban
+  - ufw
+  - unattended-upgrades
+
+# ── SSH ────────────────────────────────────────────────────────────────────
+# Port SSH (22 par défaut — changer si souhaité, penser à mettre à jour le firewall)
+os_hardening_ssh_port: 22
+
+# Interdire la connexion root directe via SSH
+os_hardening_ssh_permit_root_login: "no"
+
+# Interdire l'authentification par mot de passe (clé uniquement)
+os_hardening_ssh_password_auth: "no"
+
+# Délai d'inactivité avant déconnexion automatique (secondes)
+os_hardening_ssh_client_alive_interval: 300
+os_hardening_ssh_client_alive_count_max: 2
+
+# ── Fail2ban ───────────────────────────────────────────────────────────────
+# Nombre d'échecs avant ban
+os_hardening_fail2ban_maxretry: 5
+
+# Durée du ban en secondes (3600 = 1 heure)
+os_hardening_fail2ban_bantime: 3600
+
+# Fenêtre de détection en secondes
+os_hardening_fail2ban_findtime: 600
+
+# ── UFW (firewall) ─────────────────────────────────────────────────────────
+# Ports toujours ouverts (HTTP/HTTPS pour K3s + Traefik)
+os_hardening_ufw_allowed_ports:
+  - { port: 80, proto: tcp, comment: "HTTP" }
+  - { port: 443, proto: tcp, comment: "HTTPS" }
+
+# Port SSH — ouvert depuis admin_ip uniquement (défini dans terraform.tfvars)
+# Surcharger avec: -e os_hardening_admin_cidr=203.0.113.10/32
+os_hardening_admin_cidr: "{{ admin_cidr | default('') }}"
+
+
+# Ports K3s ouverts depuis admin_cidr.
+# En single-node, seul 6443 (API Server) est nécessaire depuis l'extérieur.
+# Le port 10250 (kubelet metrics) reste en loopback interne — ne pas l'exposer.
+# En multi-nœuds, ajouter 10250 via surcharge dans group_vars.
+os_hardening_k3s_ports:
+  - { port: 6443, proto: tcp, comment: "K3s API Server" }
+
+os_hardening_k3s_internal_cidrs:
+  - "10.42.0.0/16"   # pods Flannel
+  - "10.43.0.0/16"   # services kube-proxy
+
+# ── Mises à jour automatiques ─────────────────────────────────────────────
+os_hardening_unattended_upgrades_enabled: true
+os_hardening_unattended_reboot: false         # Ne pas rebooter automatiquement
+os_hardening_unattended_reboot_time: "03:00"  # Si reboot activé, heure préférée

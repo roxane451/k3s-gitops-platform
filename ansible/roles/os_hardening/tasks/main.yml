@@ -1,0 +1,21 @@
+---
+- name: Include package installation tasks
+  ansible.builtin.import_tasks: packages.yml
+  tags: [hardening, packages]
+
+- name: Include SSH hardening tasks
+  ansible.builtin.import_tasks: ssh.yml
+  tags: [hardening, ssh]
+
+- name: Include fail2ban tasks
+  ansible.builtin.import_tasks: fail2ban.yml
+  tags: [hardening, fail2ban]
+
+- name: Include UFW firewall tasks
+  ansible.builtin.import_tasks: ufw.yml
+  tags: [hardening, ufw]
+
+- name: Include unattended-upgrades tasks
+  ansible.builtin.import_tasks: unattended-upgrades.yml
+  tags: [hardening, updates]
+  when: os_hardening_unattended_upgrades_enabled

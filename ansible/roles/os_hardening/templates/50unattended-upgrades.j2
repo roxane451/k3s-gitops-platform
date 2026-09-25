@@ -1,0 +1,31 @@
+// Géré par Ansible (rôle os_hardening) — ne pas éditer manuellement
+Unattended-Upgrade::Allowed-Origins {
+    // Sécurité Debian uniquement — pas de mises à jour de paquets applicatifs
+    "${distro_id}:${distro_codename}-security";
+    "${distro_id}ESMApps:${distro_codename}-apps-security";
+    "${distro_id}ESM:${distro_codename}-infra-security";
+};
+
+// Ne pas mettre à jour les paquets qui pourraient casser K3s
+Unattended-Upgrade::Package-Blacklist {
+    "kubernetes*";
+    "k3s*";
+    "docker*";
+    "containerd*";
+};
+
+// Mail de notification en cas d'erreur (laisser vide pour désactiver)
+Unattended-Upgrade::Mail "";
+
+// Supprimer les paquets inutilisés après mise à jour
+Unattended-Upgrade::Remove-Unused-Dependencies "true";
+Unattended-Upgrade::Remove-New-Unused-Dependencies "true";
+
+{% if os_hardening_unattended_reboot %}
+// Redémarrage automatique si nécessaire (ex: mise à jour du kernel)
+Unattended-Upgrade::Automatic-Reboot "true";
+Unattended-Upgrade::Automatic-Reboot-Time "{{ os_hardening_unattended_reboot_time }}";
+{% else %}
+// Pas de redémarrage automatique — à planifier manuellement lors des maintenances
+Unattended-Upgrade::Automatic-Reboot "false";
+{% endif %}
