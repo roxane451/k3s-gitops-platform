@@ -225,7 +225,7 @@ Les mêmes contrôles de base tournent en local via `pre-commit`.
 
 | Dépôt | Rôle |
 |---|---|
-| [`helm-multi-service`](https://github.com/roxane451/helm-multi-service) | chart Helm générique réutilisable |
+| [`helm-fullstack-chart`](https://github.com/roxane451/helm-fullstack-chart) | chart Helm générique réutilisable |
 | [`devops-toolkit`](https://github.com/roxane451/devops-toolkit) | commandes et runbooks DevOps réutilisables |
 | [`devops-tool`](https://github.com/roxane451/devops-tool) | handbook technique MkDocs |
 
